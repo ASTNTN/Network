@@ -31,6 +31,7 @@ All message formats share a type header, but possess different fields.
 
 ```c
 typedef unsigned char u8;
+typedef signed char i8;
 
 #define ID_MAX_SIZE 16
 #define ID_MAX_LENGTH ID_MAX_SIZE - 1
@@ -93,7 +94,7 @@ struct Update { // State update from server to clients
 };
 
 struct End { // End of game, server -> client
-	u8 victory; // As boolean. Whether the receiving client won or lost
+	i8 victory; // As an enum. Whether the receiving client won (1), lost (-1), or tied (0)
 };
 
 // Empty structure - message is header-only
@@ -144,7 +145,7 @@ The acceptance message consists of a header with a type of `MSG_ACCEPT`.
 |     GO     | server -> client | Server notifies one client that their turn is beginning              |
 |    MOVE    | client -> server | Client submits requested move to server                              |
 |   UPDATE   | server -> client | Server broadcasts approved updates to both clients                   |
-|    END     | server -> client | Server notifies both clients that the game has concluded and who won |
+|    END     | server -> client | Server notifies both clients that the game has concluded and whether each won, lost, or tied |
 | DISCONNECT |  bidirectional   | Peers send intentional termination of connection                     |
 
 Intentional and unintentional disconnects by a client result in a forfeit.

@@ -2,6 +2,10 @@
 
 ## 2.3 Game Finite State Machine (FSM) Design
 
+### Error Handling
+
+A peer must never respond to an `ERROR` with an `ERROR`. A received `ERROR` is either ignored (server) or reported to the user (client), and never triggers an "other message" response. This prevents two peers from exchanging `ERROR` messages indefinitely.
+
 ### Server-Side
 
 <details><summary>Text</summary>
@@ -11,6 +15,10 @@
 	- assign client to `C1`
 	- respond `ACCEPT`
 	- go to `WAIT_P2`
+- on `KEEPALIVE`:
+	- ignore (no client is assigned, so no keepalive timer is running)
+- on `ERROR`:
+	- ignore
 - on other message:
 	- send `ERROR`
 
@@ -23,6 +31,8 @@
 	- go to `INIT`
 - on `KEEPALIVE` from `C1`:
 	- reset keepalive timer
+- on `ERROR`:
+	- ignore
 - on other message:
 	- send `ERROR`
 - on `DISCONNECT` from `C1` OR
@@ -44,6 +54,10 @@
 	- send `KEEPALIVE` to `C1` and `C2`
 - on `MOVE` from `ACTIVE`:
 	- go to `CLASSIFY`
+- on `KEEPALIVE` from `C1` or `C2`:
+	- reset that client's keepalive timer
+- on `ERROR`:
+	- ignore
 - on other message:
 	- send `ERROR`
 - on `DISCONNECT` from `C1` or `C2` as `D` OR
@@ -56,10 +70,16 @@
 
 `CLASSIFY`:
 - if invalid:
-	- send `ERROR` to active
+	- send `ERROR` to `ACTIVE`
+	- send `GO` to `ACTIVE`
 	- go to `TURN`
 - if victory:
+	- send `UPDATE` to `C1` and `C2`
 	- classify `ACTIVE` as winner
+	- go to `FINISH`
+- if draw:
+	- send `UPDATE` to `C1` and `C2`
+	- classify game as tied
 	- go to `FINISH`
 - otherwise:
 	- send `UPDATE` to `C1` and `C2`
@@ -68,7 +88,9 @@
 	- go to `TURN`
 
 `FINISH`:
-- send `END` to `C1` and `C2` if set
+- send `END` to `C1` and `C2` if set, with `victory` from each receiver's perspective:
+	- winner receives won (`1`), loser receives lost (`-1`)
+	- on a tie, both receive tied (`0`)
 - go to `CLEANUP`
 
 `CLEANUP`:
@@ -96,12 +118,14 @@ stateDiagram-v2
 
 	%% WAIT_P1
 	WAIT_P1 --> WAIT_P2 : CONNECT -> assign C1, send ACCEPT
+	WAIT_P1 --> WAIT_P1 : KEEPALIVE / ERROR -> ignore
 	WAIT_P1 --> WAIT_P1 : Other message -> send ERROR
 
 	%% WAIT_P2
 	WAIT_P2 --> INIT : CONNECT from not C1 -> assign C2, send ACCEPT
 	WAIT_P2 --> WAIT_P2 : tick -> send KEEPALIVE to C1
 	WAIT_P2 --> WAIT_P2 : KEEPALIVE from C1 -> reset keepalive timer
+	WAIT_P2 --> WAIT_P2 : ERROR -> ignore
 	WAIT_P2 --> WAIT_P2 : Other message -> send ERROR
 	WAIT_P2 --> WAIT_P1 : DISCONNECT / timeout / EOF / TCP error from C1 -> clear C1
 
@@ -111,16 +135,19 @@ stateDiagram-v2
 	%% TURN
 	TURN --> CLASSIFY : MOVE from ACTIVE -> classify move
 	TURN --> TURN : tick -> send KEEPALIVE to C1, C2
+	TURN --> TURN : KEEPALIVE from C1 or C2 -> reset that client's keepalive timer
+	TURN --> TURN : ERROR -> ignore
 	TURN --> TURN : Other message -> send ERROR
 	TURN --> FINISH : DISCONNECT / timeout / EOF / TCP error from C1 or C2 as D -> classify opponent of D as winner, clear D
 
 	%% CLASSIFY
-	CLASSIFY --> FINISH : Victory -> classify ACTIVE as winner
-	CLASSIFY --> TURN : Invalid MOVE -> send ERROR to ACTIVE
-	CLASSIFY --> TURN : Valid non-victory MOVE -> send UPDATE, swap ACTIVE, send GO to ACTIVE
+	CLASSIFY --> FINISH : Victory -> send UPDATE, classify ACTIVE as winner
+	CLASSIFY --> FINISH : Draw -> send UPDATE, classify game as tied
+	CLASSIFY --> TURN : Invalid MOVE -> send ERROR to ACTIVE, send GO to ACTIVE
+	CLASSIFY --> TURN : Valid non-terminal MOVE -> send UPDATE, swap ACTIVE, send GO to ACTIVE
 
 	%% FINISH
-	FINISH --> CLEANUP : Send END to C1 and C2 if set
+	FINISH --> CLEANUP : Send END to C1 and C2 if set (won 1 / lost -1 / tied 0)
 
 	%% CLEANUP
 	CLEANUP --> WAIT_P1 : Send DISCONNECT to C1 and C2 if set
@@ -137,11 +164,18 @@ stateDiagram-v2
 - go to `PAIR`
 
 `PAIR`:
+- on tick:
+	- send `KEEPALIVE` to server
 - on `ACCEPT`:
 	- initialize game state
 	- go to `WAIT`
+- on `KEEPALIVE` from server:
+	- reset keepalive timer
+- on `ERROR` from server:
+	- warn user
 - on other message:
 	- send `ERROR`
+- on `DISCONNECT` from server OR
 - on keepalive timeout from server OR
 - on `EOF` from server OR
 - on TCP error from server:
@@ -156,6 +190,8 @@ stateDiagram-v2
 	- go to `FINISH`
 - on `KEEPALIVE` from server:
 	- reset keepalive timer
+- on `ERROR` from server:
+	- warn user
 - on other message:
 	- send `ERROR` to server
 - on `DISCONNECT` from server OR
@@ -171,7 +207,7 @@ stateDiagram-v2
 	- prompt user for move
 	- send `MOVE` to server
 	- go to `TURN`
-- on `ERROR from server`
+- on `ERROR` from server:
 	- warn user
 	- go to `TURN`
 - on `UPDATE`
@@ -190,7 +226,7 @@ stateDiagram-v2
 	- exit
 
 `FINISH`:
-- display winner
+- display result from `END` (won, lost, or tied)
 - send `DISCONNECT` to server if set
 - exit
 
@@ -212,15 +248,19 @@ stateDiagram-v2
 	ENTER --> PAIR : Send CONNECT
 
 	%% PAIR
+	PAIR --> PAIR : tick -> send KEEPALIVE
 	PAIR --> WAIT : ACCEPT -> initialize game state
+	PAIR --> PAIR : KEEPALIVE -> reset keepalive timer
+	PAIR --> PAIR : ERROR -> warn user
 	PAIR --> PAIR : Other message -> send ERROR
-	PAIR --> [*] : Keepalive timeout / EOF / TCP error -> exit
+	PAIR --> [*] : DISCONNECT / keepalive timeout / EOF / TCP error -> exit
 
 	%% WAIT
 	WAIT --> WAIT : tick -> send KEEPALIVE
 	WAIT --> TURN : START
 	WAIT --> FINISH : END
 	WAIT --> WAIT : KEEPALIVE -> reset keepalive timer
+	WAIT --> WAIT : ERROR -> warn user
 	WAIT --> WAIT : Other message -> send ERROR
 	WAIT --> [*] : DISCONNECT / keepalive timeout / EOF / TCP error -> exit
 
@@ -235,7 +275,7 @@ stateDiagram-v2
 	TURN --> [*] : DISCONNECT / keepalive timeout / EOF / TCP error -> exit
 
 	%% FINISH
-	FINISH --> [*] : Display winner, send DISCONNECT if set, exit
+	FINISH --> [*] : Display result (won / lost / tied), send DISCONNECT if set, exit
 ```
 
 ### Disconnects
