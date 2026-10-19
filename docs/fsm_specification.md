@@ -8,6 +8,8 @@ A peer must never respond to an `ERROR` with an `ERROR`. A received `ERROR` is e
 
 ### Server-Side
 
+The server FSM describes the server's behavior as a whole. `concurrency_design.md` describes which thread performs each step. In particular, each client's worker thread sends all messages to its client, including keepalives, and detects that client's disconnects and timeouts.
+
 <details><summary>Text</summary>
 
 `WAIT_P1`:
